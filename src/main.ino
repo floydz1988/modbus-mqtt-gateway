@@ -1,89 +1,179 @@
 #include <ModbusMaster.h>
 
-// ---------- Pin definitions ----------
-#define MAX485_DE_RE 4        // DE and RE tied together
-#define MODBUS_RX    16       // UART2 RX
-#define MODBUS_TX    17       // UART2 TX
+/* =========================
+   Pin configuration
+   ========================= */
+#define MAX485_DE_RE 4
+#define MODBUS_RX    16
+#define MODBUS_TX    17
 
-// ---------- Modbus ----------
+/* =========================
+   Modbus
+   ========================= */
 ModbusMaster node;
 
-// ---------- RS-485 direction control ----------
-void preTransmission()
-{
-  digitalWrite(MAX485_DE_RE, HIGH);  // Transmit mode
+/* =========================
+   Retry & health configuration
+   ========================= */
+const uint8_t MAX_RETRIES = 3;
+const uint8_t MAX_CONSECUTIVE_FAILURES = 5;
+const uint32_t HEALTH_FAIL_TIMEOUT_MS = 10000;
+
+/* =========================
+   Counters & state
+   ========================= */
+uint32_t successCount = 0;
+uint32_t crcErrorCount = 0;
+uint32_t timeoutCount = 0;
+
+uint8_t consecutiveFailures = 0;
+uint32_t lastSuccessMillis = 0;
+
+uint8_t recentErrors = 0;
+uint8_t recentSuccesses = 0;
+
+const uint8_t HEALTH_WINDOW = 5;
+
+/* =========================
+   Health state
+   ========================= */
+enum HealthState {
+  HEALTH_OK,
+  HEALTH_DEGRADED,
+  HEALTH_FAILED
+};
+
+HealthState health = HEALTH_FAILED;
+
+/* =========================
+   RS485 direction control
+   ========================= */
+void preTransmission() {
+  digitalWrite(MAX485_DE_RE, HIGH);
 }
 
-void postTransmission()
-{
-  
-  digitalWrite(MAX485_DE_RE, LOW);   // Receive mode
-  delayMicroseconds(200);
-  
+void postTransmission() {
+  digitalWrite(MAX485_DE_RE, LOW);
 }
 
-void setup()
-{
-  // USB serial for logs
+/* =========================
+   Health evaluation
+   ========================= */
+void updateHealth() {
+  uint32_t now = millis();
+
+  if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES ||
+      (now - lastSuccessMillis) > HEALTH_FAIL_TIMEOUT_MS) {
+    health = HEALTH_FAILED;
+  }
+  else if (recentErrors > 0) {
+    health = HEALTH_DEGRADED;
+  }
+  else {
+    health = HEALTH_OK;
+  }
+}
+
+
+const char* healthToString() {
+  switch (health) {
+    case HEALTH_OK:       return "OK";
+    case HEALTH_DEGRADED: return "DEGRADED";
+    case HEALTH_FAILED:   return "FAILED";
+    default:              return "UNKNOWN";
+  }
+}
+
+/* =========================
+   Setup
+   ========================= */
+void setup() {
   Serial.begin(115200);
   delay(1000);
 
   Serial.println("SDM120M Modbus RTU test starting...");
 
-  // Direction control pin
   pinMode(MAX485_DE_RE, OUTPUT);
-  digitalWrite(MAX485_DE_RE, LOW);   // Start in receive mode
+  digitalWrite(MAX485_DE_RE, LOW);
 
-  // UART2 for Modbus
   Serial2.begin(
-    2400,                // baud rate
+    2400,              // stable baud rate
     SERIAL_8N1,
     MODBUS_RX,
     MODBUS_TX
   );
 
-  // Modbus slave ID = 1
   node.begin(1, Serial2);
-  //node.setTimeout(500);  // milliseconds
-  delay(1500);
-  digitalWrite(MAX485_DE_RE, LOW);   // Start in receive mode
-
-
-  // Attach direction control callbacks
   node.preTransmission(preTransmission);
   node.postTransmission(postTransmission);
+
+  lastSuccessMillis = millis();
 
   Serial.println("Setup complete.");
 }
 
-void loop()
-{
+/* =========================
+   Main loop
+   ========================= */
+void loop() {
   uint8_t result;
   float voltage;
+  bool success = false;
 
-  // SDM120M voltage:
-  // Input Register 0x0000
-  // 2 registers (32-bit float)
-  result = node.readInputRegisters(0x0000, 2);
+  for (uint8_t attempt = 1; attempt <= MAX_RETRIES; attempt++) {
 
-  if (result == node.ku8MBSuccess)
-  {
-    // SDM120M uses big-endian word order
-    uint32_t raw =
-      ((uint32_t)node.getResponseBuffer(0) << 16) |
-       (uint32_t)node.getResponseBuffer(1);
+    result = node.readInputRegisters(0x0000, 2);
 
-    memcpy(&voltage, &raw, sizeof(voltage));
+    if (result == node.ku8MBSuccess) {
+      uint32_t raw =
+        ((uint32_t)node.getResponseBuffer(0) << 16) |
+         (uint32_t)node.getResponseBuffer(1);
 
+      memcpy(&voltage, &raw, sizeof(voltage));
+
+      successCount++;
+      consecutiveFailures = 0;
+      lastSuccessMillis = millis();
+      success = true;
+      recentSuccesses++;
+      recentErrors = 0;   // forgive past errors
+      break;
+    }
+
+    if (result == node.ku8MBInvalidCRC) {
+      crcErrorCount++;
+    }
+    else if (result == node.ku8MBResponseTimedOut) {
+      timeoutCount++;
+    }
+
+    delay(100);
+  }
+
+  if (!success) {
+    consecutiveFailures++;
+    recentErrors++;
+    recentSuccesses = 0;
+  }
+
+  updateHealth();
+
+  /* =========================
+     Output
+     ========================= */
+  if (success) {
     Serial.print("Voltage: ");
     Serial.print(voltage, 2);
-    Serial.println(" V");
-  }
-  else
-  {
-    Serial.print("Modbus error: ");
-    Serial.println(result);
+    Serial.print(" V | Health: ");
+    Serial.println(healthToString());
+  } else {
+    Serial.print("Read failed | Health: ");
+    Serial.print(healthToString());
+    Serial.print(" | CRC=");
+    Serial.print(crcErrorCount);
+    Serial.print(" TO=");
+    Serial.println(timeoutCount);
   }
 
-  delay(1000);
+  delay(1500);
 }
