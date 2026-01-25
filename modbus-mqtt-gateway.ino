@@ -2,6 +2,10 @@
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include "soc/rtc_cntl_reg.h"
+#include "inc/logger.h"
+#include "inc/health.h"
+#include "inc/sdm120m.h"
+
 
 /* =========================
    Pin configuration
@@ -173,7 +177,7 @@ void setup() {
   connectMQTT();
 #endif
 
-  Serial.println("Setup complete.");
+  Serial.println("Setup completed successfully.");
 }
 
 /* =========================
