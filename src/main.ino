@@ -1,4 +1,7 @@
 #include <ModbusMaster.h>
+#include <WiFi.h>
+#include <PubSubClient.h>
+#include "soc/rtc_cntl_reg.h"
 
 /* =========================
    Pin configuration
@@ -45,6 +48,18 @@ enum HealthState {
 
 HealthState health = HEALTH_FAILED;
 
+/* Wifi module SSID and pwd config */
+const char* WIFI_SSID = "WILHELM.TEL-UWEV51SDIW";
+const char* WIFI_PASS = "85725677939890880558";
+
+/*MQTT broker IP and port setting */
+const char* MQTT_BROKER = "192.168.178.10";   // or test.mosquitto.org
+const int   MQTT_PORT   = 1883;
+
+WiFiClient espClient;
+PubSubClient mqttClient(espClient);
+
+
 /* =========================
    RS485 direction control
    ========================= */
@@ -84,10 +99,51 @@ const char* healthToString() {
   }
 }
 
+void connectWiFi() {
+
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("WiFi connected");
+  Serial.println();
+  Serial.print("ESP32 IP: ");
+  Serial.println(WiFi.localIP());
+}
+
+void connectMQTT() {
+  while (!mqttClient.connected()) {
+    mqttClient.connect("esp32-gateway-001");
+    delay(1000);
+  }
+}
+
+/*MQTT - publishing valid data */
+void publishVoltage(float voltage) {
+  char payload[128];
+
+  snprintf(payload, sizeof(payload),
+    "{\"voltage\":%.2f,\"health\":\"%s\",\"ts\":%lu}",
+    voltage,
+    healthToString(),
+    time(nullptr)
+  );
+
+  mqttClient.publish(
+    "gateway/esp32-001/devices/sdm120m/metrics",
+    payload
+  );
+}
+
+
+
 /* =========================
    Setup
    ========================= */
 void setup() {
+  //WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
   Serial.begin(115200);
   delay(1000);
 
@@ -108,6 +164,14 @@ void setup() {
   node.postTransmission(postTransmission);
 
   lastSuccessMillis = millis();
+  
+  /*Wifi connection setup*/
+  
+#if 0
+  connectWiFi();
+  mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
+  connectMQTT();
+#endif
 
   Serial.println("Setup complete.");
 }
@@ -137,6 +201,14 @@ void loop() {
       success = true;
       recentSuccesses++;
       recentErrors = 0;   // forgive past errors
+
+      /* publishing MQTT only data is valid*/
+#if 0
+      if (!mqttClient.connected()) {
+        connectMQTT();
+        }
+        mqttClient.loop();
+#endif
       break;
     }
 
