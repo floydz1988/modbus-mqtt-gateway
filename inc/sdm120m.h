@@ -11,6 +11,7 @@ public:
   const char* type() const override;
   bool read() override;
   float voltage() const;
+  uint8_t id() const { return slave; }
   // Optional tuning
   void setRetries(uint8_t retries, uint16_t delayMs);
 
