@@ -4,8 +4,8 @@
 #define DEVICE_ID "esp32-001"
 
 /* ========= WiFi ========= */
-#define WIFI_SSID "WILHELM.TEL-UWEV51SDIW"
-#define WIFI_PASS "85725677939890880558"
+#define WIFI_SSID "YOUR_SSID"
+#define WIFI_PASS "YOUR_PWD"
 
 /* ========= MQTT ========= */
 #define MQTT_BROKER "192.168.178.40"
